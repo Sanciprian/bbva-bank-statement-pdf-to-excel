@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import IO, TYPE_CHECKING
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
@@ -135,9 +135,12 @@ def _write_summary(ws: Worksheet, statements: list["BankStatement"]) -> None:
     _autosize(ws)
 
 
-def write_excel(statements: list["BankStatement"], path: str | Path) -> None:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+def write_excel(statements: list["BankStatement"], target: str | Path | IO[bytes]) -> None:
+    """`target` is a filesystem path, or a writable file-like object (e.g. an
+    in-memory `io.BytesIO` for a UI download button, never touching disk)."""
+    if isinstance(target, (str, Path)):
+        target = Path(target)
+        target.parent.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()
     txn_sheet = wb.active
@@ -147,4 +150,4 @@ def write_excel(statements: list["BankStatement"], path: str | Path) -> None:
     summary_sheet = wb.create_sheet("Summary")
     _write_summary(summary_sheet, statements)
 
-    wb.save(path)
+    wb.save(target)

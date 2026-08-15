@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections import Counter
 from decimal import Decimal
-from pathlib import Path
 
 from bank_parser.detection.classification import classify_rows
 from bank_parser.detection.headers import find_header_candidates
@@ -25,7 +24,7 @@ from bank_parser.parsing.aliases import COLUMN_ALIASES
 from bank_parser.parsing.dates import parse_period
 from bank_parser.parsing.transaction_parser import normalize_transactions
 from bank_parser.pdf.camelot_adapter import extract_tables
-from bank_parser.pdf.reader import read_pdf
+from bank_parser.pdf.reader import PdfSource, read_pdf
 from bank_parser.profiles.base import BankProfile
 from bank_parser.profiles.registry import KNOWN_PROFILES, select_profile
 from bank_parser.validation.totals import find_printed_totals
@@ -59,9 +58,13 @@ class StatementParser:
     def __init__(self, profiles: list[BankProfile] | None = None) -> None:
         self._profiles = profiles if profiles is not None else KNOWN_PROFILES
 
-    def parse(self, pdf: str | Path) -> BankStatement:
-        path = Path(pdf)
-        document = read_pdf(path)
+    def parse(self, pdf: PdfSource, filename: str | None = None) -> BankStatement:
+        """`pdf` is a filesystem path, or raw PDF bytes (e.g. an uploaded
+        file's contents) -- pass `filename` alongside bytes since there's no
+        path to infer one from. Camelot's diagnostic pass needs a real file
+        on disk, so it's skipped (not a hard requirement -- see doc section
+        24) when given bytes rather than writing a temporary file."""
+        document = read_pdf(pdf, filename=filename)
         profile = select_profile(document, self._profiles)
 
         headers = find_header_candidates(document, aliases=_merged_aliases(profile))
@@ -92,7 +95,7 @@ class StatementParser:
         transactions = normalize_transactions(classified, region.column_layout, period, profile)
 
         # Best-effort/diagnostic only -- never blocks the pipeline (doc section 24).
-        candidate_tables = extract_tables(path)
+        candidate_tables = extract_tables(pdf) if not isinstance(pdf, bytes) else []
 
         totals = find_printed_totals(document, profile)
         validation = validate_statement(transactions, totals)

@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=9.1,<10"]
+ui = ["streamlit>=1.38,<2"]
 
 [project.scripts]
 bank-parser = "bank_parser.cli:main"

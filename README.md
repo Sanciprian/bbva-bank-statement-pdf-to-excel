@@ -14,6 +14,7 @@ statement, and writes `output/transacciones.xlsx` and `output/transacciones.csv`
 - [Why it works this way](#why-it-works-this-way)
 - [Setup](#setup)
 - [Usage](#usage)
+- [Local web UI](#local-web-ui)
 - [How the pipeline works](#how-the-pipeline-works)
 - [Project layout](#project-layout)
 - [Tests](#tests)
@@ -55,12 +56,13 @@ principle: geometry first, heuristics second, financial validation always.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,ui]"
 ```
 
 This installs the `bank-parser` package (editable) plus its dependencies: `pymupdf` (spatial text
-extraction), `camelot-py` (optional table-extraction assistance), `pandas`, `openpyxl`, and
-`pytest` for the test suite.
+extraction), `camelot-py` (optional table-extraction assistance), `pandas`, `openpyxl`, `pytest`
+for the test suite, and `streamlit` for the local web UI. Drop `,ui` from the extras if you only
+want the CLI.
 
 ---
 
@@ -115,7 +117,33 @@ else:
 ```
 
 The parser has no dependency on the CLI or any UI — the same `StatementParser` is usable from
-scripts, notebooks, tests, or a future interface without modification.
+scripts, notebooks, tests, or a UI without modification. `parse()` also accepts raw PDF bytes
+(`StatementParser().parse(pdf_bytes, filename="statement.pdf")`), which is what lets the web UI
+below hand it an uploaded file straight from memory, with nothing ever written to disk.
+
+---
+
+## Local web UI
+
+For a drag-and-drop interface instead of the CLI:
+
+```bash
+streamlit run app.py
+```
+
+This opens a local page at `http://localhost:8501`. Drop in one or more statement PDFs and it
+shows, per statement: institution, transaction count, reconciliation status, confidence score,
+balance-chain check results, and the full transaction table — plus CSV/XLSX download buttons for
+everything combined. Every file is parsed in memory (`UploadedFile` bytes straight into
+`StatementParser`, per the library usage above) and nothing is written to disk; closing the tab
+discards everything. `app.py` is intentionally thin — it only renders what `bank_parser` returns,
+with no parsing logic of its own (see [`StatementParser`'s independence from the
+UI](#as-a-library)).
+
+Turn on **"Compare against the original PDF pages, side by side"** to put the source PDF pages
+(rendered via `bank_parser.pdf.render_page_to_png`, capped at 6 pages per statement) next to the
+extracted transaction table — both panels are a fixed height with their own independent scrollbar,
+so you can eyeball the extraction against the source page by page.
 
 ---
 
@@ -162,9 +190,10 @@ fallback if that generic scan finds nothing.
 
 ```
 pyproject.toml
+app.py            local Streamlit UI -- renders only, no parsing logic
 src/bank_parser/
   models/        DocumentWord, SpatialDocument, Transaction, BankStatement, StatementValidation
-  pdf/            PyMuPDF reading + best-effort Camelot assist
+  pdf/            PyMuPDF reading, page-image rendering for the UI, best-effort Camelot assist
   detection/      header/column detection, row reconstruction, row classification
   parsing/        money/date parsing, column aliases, StatementParser (the public API)
   profiles/       BankProfile hints (BBVA today; the seam for more banks later)
@@ -181,8 +210,8 @@ input/            put your PDFs here (git-ignored)
 output/           generated workbook + CSV (git-ignored)
 ```
 
-`StatementParser` is deliberately the only thing the CLI touches beyond exporting — a future UI
-would call the exact same `parse()` method.
+`StatementParser` is deliberately the only thing the CLI and the Streamlit UI touch beyond
+exporting — both call the exact same `parse()` method, and neither contains any parsing logic.
 
 ---
 

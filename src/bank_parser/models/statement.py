@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import IO, TYPE_CHECKING, Any
 
 from bank_parser.models.transaction import Transaction
 from bank_parser.models.validation import StatementValidation
@@ -35,12 +35,12 @@ class BankStatement:
 
         return statement_to_dataframe(self)
 
-    def to_csv(self, path: str | Path) -> None:
+    def to_csv(self, target: str | Path | IO[bytes]) -> None:
         from bank_parser.export.csv_exporter import write_csv
 
-        write_csv(self.to_dataframe(), Path(path))
+        write_csv(self.to_dataframe(), target)
 
-    def to_excel(self, path: str | Path) -> None:
+    def to_excel(self, target: str | Path | IO[bytes]) -> None:
         from bank_parser.export.excel_exporter import write_excel
 
-        write_excel([self], Path(path))
+        write_excel([self], target)
