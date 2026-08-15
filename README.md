@@ -216,6 +216,5 @@ data.
 
 ## Privacy
 
-This repository is **public**. `input/`, `output/`, `pages/`, `.venv/`, and `.DS_Store` are all
-git-ignored, so your real statements and the generated workbook stay on your machine and never get
-committed.
+This repository is **public**. `input/`, `output/`, `.venv/`, and `.DS_Store` are all git-ignored,
+so your real statements and the generated workbook stay on your machine and never get committed.
