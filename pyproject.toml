@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bank-statement-parser"
+version = "0.1.0"
+description = "Local, privacy-first, bank-agnostic PDF bank-statement-to-CSV/XLSX parser (geometry-first extraction with financial validation)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=3.0,<4",
+    "openpyxl>=3.1,<4",
+    "pymupdf>=1.24,<2",
+    "camelot-py>=2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1,<10"]
+
+[project.scripts]
+bank-parser = "bank_parser.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bank_parser"]

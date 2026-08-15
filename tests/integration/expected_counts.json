@@ -1,0 +1,11 @@
+{
+  "Estado de Cuenta - 0W9V5CFM.pdf": { "expected_transactions": 16, "expect_reconciled": true },
+  "Estado de Cuenta - 0WZTCB54.pdf": { "expected_transactions": 17, "expect_reconciled": true },
+  "Estado de Cuenta - 8EGYPV98.pdf": { "expected_transactions": 11, "expect_reconciled": true },
+  "Estado de Cuenta - R79YBDC8.pdf": { "expected_transactions": 11, "expect_reconciled": true },
+  "Estado de Cuenta - WZEA5FER4.pdf": { "expected_transactions": 21, "expect_reconciled": true },
+  "Estado de Cuenta - YEXET3QM.pdf": { "expected_transactions": 160, "expect_reconciled": true },
+  "Estado de Cuenta - YEXET3QM1.pdf": { "expected_transactions": 86, "expect_reconciled": true },
+  "Estado de Cuenta - YEXET3QM2.pdf": { "expected_transactions": 42, "expect_reconciled": true },
+  "Estado de Cuenta - YEXET3QM3.pdf": { "expected_transactions": 55, "expect_reconciled": true }
+}

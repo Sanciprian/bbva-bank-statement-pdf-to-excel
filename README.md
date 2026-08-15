@@ -1,30 +1,22 @@
-# bbva-bank-statement-pdf-to-excel
+# bank-statement-parser
 
-Convert BBVA México bank-statement PDFs into a single, clean Excel workbook — accurately,
-locally, and without uploading your financial data anywhere.
+Convert digitally generated bank-statement PDFs into a clean, structured Excel workbook (and
+CSV) — accurately, locally, and without uploading your financial data anywhere.
 
-It reads every PDF in `input/`, extracts the individual transactions, optionally labels each one
-with a spending category using a local LLM, verifies the numbers against the totals BBVA prints on
-the statement, and writes `output/transacciones.xlsx`.
+It reads every PDF in `input/`, extracts transactions using each PDF's own text geometry (not
+plain-text scraping), verifies the numbers against the totals the bank itself prints on the
+statement, and writes `output/transacciones.xlsx` and `output/transacciones.csv`.
 
 ---
 
 ## Table of contents
 
 - [Why it works this way](#why-it-works-this-way)
-- [The two statement formats](#the-two-statement-formats)
 - [Setup](#setup)
 - [Usage](#usage)
-- [How the pipeline works (step by step)](#how-the-pipeline-works-step-by-step)
-  - [1. Format detection](#1-format-detection)
-  - [2. Coordinate-based parsing](#2-coordinate-based-parsing)
-  - [3. Date handling and year inference](#3-date-handling-and-year-inference)
-  - [4. Internal-transfer filtering](#4-internal-transfer-filtering)
-  - [5. Reconciliation (the correctness check)](#5-reconciliation-the-correctness-check)
-  - [6. Categorization with a local LLM](#6-categorization-with-a-local-llm)
-  - [7. Writing the Excel workbook](#7-writing-the-excel-workbook)
-- [The output file](#the-output-file)
+- [How the pipeline works](#how-the-pipeline-works)
 - [Project layout](#project-layout)
+- [Tests](#tests)
 - [Troubleshooting](#troubleshooting)
 - [Privacy](#privacy)
 
@@ -32,39 +24,29 @@ the statement, and writes `output/transacciones.xlsx`.
 
 ## Why it works this way
 
-BBVA's PDFs are **digitally generated and contain a clean embedded text layer** — the numbers,
-dates, and descriptions are real text, not scanned images. That single fact drives the whole
-design:
+A PDF does not store a table as a table. It stores independent words at (x, y) coordinates on a
+page. Naive text extraction throws that position away and gets the columns wrong the moment a
+statement has more than one number per line.
 
-- **Extraction is deterministic, not AI.** Every amount and date is read directly from the PDF's
-  text using the exact x/y position of each word ([`pdfplumber`](https://github.com/jsvine/pdfplumber)).
-  There is **no OCR and no vision model** in the extraction path. A vision LLM reading page images
-  would be slower, cost money or GPU time, and — most importantly — could silently hallucinate or
-  drop an amount. Reading the text layer cannot.
-- **The result is checked, not trusted.** Every statement is reconciled against the totals BBVA
-  itself prints (`TOTAL CARGOS` / `TOTAL ABONOS`). If our sum doesn't match BBVA's to the cent, the
-  statement is flagged. On the current sample set all 7 statements reconcile exactly.
-- **The LLM does only what it's good at.** A local model is used *only* to guess a spending
-  category per merchant (e.g. `STARBUCKS → restaurants`). It never touches the amounts, so it can't
-  corrupt your data, and the tool still runs with the LLM turned off.
+This parser never flattens a page to plain text. Every extracted word keeps its page and bounding
+box, and every later stage — finding the transaction table, figuring out its columns,
+reconstructing rows, telling a transaction apart from a repeated header or a footer disclaimer —
+reasons about *position*, not word order.
 
----
+It is also bank-agnostic by design. Instead of a hardcoded `if bank == "BBVA": ...` branch, column
+headers are matched against a vocabulary of semantic aliases (`FECHA`/`DATE`, `CARGOS`/`DEBIT`,
+`SALDO`/`BALANCE`, …), and column boundaries are derived at runtime from wherever that header's
+words actually sit on the page — never from a coordinate tuned to one PDF. A bank can supply a
+`BankProfile` with a few *hints* (how to recognize it, a literal fallback phrase for its totals
+line), but the actual parsing logic is always the same generic engine.
 
-## The two statement formats
+Finally, extraction is checked, not trusted. Every statement's running balance and printed
+CARGOS/ABONOS (or DEBIT/CREDIT) totals are re-derived from the extracted transactions and compared
+against what the bank itself printed. A statement that doesn't reconcile is flagged, not silently
+accepted.
 
-BBVA issues two structurally different statements, and the tool auto-detects which is which:
-
-| | Credit card | Debit / checking |
-|---|---|---|
-| Products | `TARJETA … BBVA` | `Libretón`, `Cuenta Digital` |
-| Section title | `DESGLOSE DE MOVIMIENTOS` | `Detalle de Movimientos Realizados` |
-| Date format | `24-dic-2025` (year present) | `10/OCT` (no year — inferred) |
-| Direction of money | a leading `+` = charge, `-` = payment | separate **CARGOS** and **ABONOS** columns |
-| Running balance | not per row | **SALDO OPERACIÓN / LIQUIDACIÓN** columns |
-| Extra tables | installments (`MESES SIN INTERESES`) | — |
-
-Both are handled by dedicated parsers (`bbva/parse_credit.py`, `bbva/parse_debit.py`) that share
-the same helpers and produce the same canonical row shape.
+No OCR, no cloud APIs, no LLM — this is deterministic geometry and arithmetic. The guiding
+principle: geometry first, heuristics second, financial validation always.
 
 ---
 
@@ -73,20 +55,12 @@ the same helpers and produce the same canonical row shape.
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 ```
 
-Only three direct dependencies are installed: `pdfplumber` (PDF text + coordinates), `openpyxl`
-(write `.xlsx`), and `requests` (talk to the local LLM).
-
-Categorization is **optional**. To enable it, install [Ollama](https://ollama.com) and pull a model
-once:
-
-```bash
-ollama pull qwen2.5:7b
-```
-
-If you don't, just run with `--no-llm` (see below) and you'll still get a full workbook.
+This installs the `bank-parser` package (editable) plus its dependencies: `pymupdf` (spatial text
+extraction), `camelot-py` (optional table-extraction assistance), `pandas`, `openpyxl`, and
+`pytest` for the test suite.
 
 ---
 
@@ -95,190 +69,152 @@ If you don't, just run with `--no-llm` (see below) and you'll still get a full w
 Drop your statement PDFs into `input/`, then run:
 
 ```bash
-# Default: read input/, categorize via Ollama, write output/transacciones.xlsx
-python bbva_to_excel.py
+# Default: read input/, write output/transacciones.csv and output/transacciones.xlsx
+bank-parser
 
-# Skip the LLM entirely (no Ollama needed) — categories come from built-in rules only
-python bbva_to_excel.py --no-llm
+# Equivalent, without an editable install:
+python -m bank_parser
 
-# Point at a different input folder and/or output file
-python bbva_to_excel.py --input some/dir --output report.xlsx
+# Only one export format
+bank-parser --formats xlsx
 
-# Use a different local model
-python bbva_to_excel.py --model llama3.2:latest
+# Different folders
+bank-parser --input some/dir --output-dir report/
+
+# Also dump a per-statement diagnostics JSON bundle (headers found, row
+# classifications, printed totals, confidence components) for debugging
+bank-parser --debug
 ```
 
 A typical run prints a per-statement status line and a final tally:
 
 ```
-Parsing 7 statement(s) from input/
-  [OK      ] Estado de Cuenta - 0W9V5CFM.pdf  (debit) 16 txns
-  [OK      ] Estado de Cuenta - YEXET3QM.pdf  (credit) 70 txns +22 installments
+Parsing 9 statement(s) from input/
+  [OK     ] Estado de Cuenta - 0W9V5CFM.pdf  16 txns  score=0.96
+  [OK     ] Estado de Cuenta - YEXET3QM.pdf  160 txns  score=0.80
   ...
-Categorizing 196 unique merchants via Ollama (qwen2.5:7b)...
 
-Wrote output/transacciones.xlsx  (347 rows, 7/7 statements reconciled)
+Wrote output/transacciones.csv, output/transacciones.xlsx  (9 parsed, 9 reconciled, 0 need review, 0 failed)
 ```
 
-`[OK]` means the statement reconciled against BBVA's printed totals; `[MISMATCH]` means it didn't
-(and the process exits non-zero so you notice). Either way the workbook is still written so you can
-inspect the offending statement on the **Summary** sheet.
+`OK` means the statement's own arithmetic reconciled; `REVIEW` means it didn't (the workbook still
+gets written, so you can inspect the offending statement on the **Summary** sheet). Exit code is
+`0` when everything reconciled, `2` when at least one statement needs review, `1` if a PDF
+couldn't be parsed at all or none were found.
+
+### As a library
+
+```python
+from bank_parser import StatementParser
+
+statement = StatementParser().parse("statement.pdf")
+if statement.validation.is_reliable:
+    statement.to_excel("statement.xlsx")
+else:
+    print(statement.validation.warnings)
+```
+
+The parser has no dependency on the CLI or any UI — the same `StatementParser` is usable from
+scripts, notebooks, tests, or a future interface without modification.
 
 ---
 
-## How the pipeline works (step by step)
-
-The CLI (`bbva_to_excel.py`) orchestrates the modules in `bbva/`. Here is exactly what happens to
-each PDF.
-
-### 1. Format detection
-
-`bbva/detect.py` reads the text of the first few pages and looks for marker phrases
-(`DESGLOSE DE MOVIMIENTOS` → credit, `Detalle de Movimientos Realizados` → debit). This decides
-which parser runs.
-
-### 2. Coordinate-based parsing
-
-This is the heart of the tool. For each page, `pdfplumber` returns every word together with its
-bounding box (`x0`, `x1`, `top`, `bottom`). The parsers (`bbva/parse_credit.py`,
-`bbva/parse_debit.py`) then, with helpers in `bbva/layout.py`:
-
-1. **Group words into visual rows** by their vertical position (`group_into_rows`, with a small
-   tolerance so a date and its amount that sit a pixel apart still merge into one logical row).
-2. **Assign each word to a column by its horizontal position.** This is why the tool is robust:
-   - On **debit** statements, *CARGOS* and *ABONOS* look identical (both are just peso amounts) —
-     the only thing that distinguishes a charge from a deposit is **which column** it's in. The
-     parser reads the header row once (`CARGOS`, `ABONOS`, `OPERACIÓN`, `LIQUIDACIÓN`), computes the
-     center x of each column, and assigns every amount to the nearest column center. Splitting on
-     spaces (what the old code did) cannot do this reliably; positions can.
-   - On **credit** statements, a single `+` or `-` token (located in the amount band, `x > 480`)
-     tells charge vs. payment.
-3. **Stitch multi-line records.** Debit transactions span several lines (RFC, authorization code,
-   SPEI reference, counterparty name). Continuation lines — recognised because they start in the
-   description column and carry no leading date — are appended to the current transaction's
-   `details` field. Page headers/footers fall outside that band and are ignored.
-
-Every parsed movement becomes a `Transaction` (`bbva/models.py`) with a single canonical shape, so
-both formats flow into the same Excel columns.
-
-### 3. Date handling and year inference
-
-`bbva/dates.py` maps BBVA's Spanish month abbreviations (`ene, feb, … dic`) to month numbers.
-
-- **Credit** dates already include the year, so they parse directly.
-- **Debit** dates are `DD/MMM` with **no year**. The parser reads the statement period
-  (`Periodo DEL 09/10/2025 AL 08/11/2025`) and picks the year that places each date inside that
-  range. This correctly resolves the **December → January roll-over** (e.g. a `28/DIC` and a
-  `03/ENE` on the same statement get 2025 and 2026 respectively).
-
-### 4. Internal-transfer filtering
-
-When you put a credit-card purchase on *meses sin intereses*, BBVA records an internal pair on the
-regular table — `PROMOCION MESES S/INT` (a `+`) and `TRASPASO A MESES SIN INTERES` (an equal `-`).
-They cancel to zero and are **not real spending**, so they're excluded from the output. They are,
-however, still counted during reconciliation, because BBVA's printed totals include them (see next).
-
-### 5. Reconciliation (the correctness check)
-
-For every statement the tool sums the charges and the credits **including** the internal pairs and
-compares them to the totals BBVA prints (`TOTAL CARGOS`/`TOTAL ABONOS` on credit,
-`TOTAL IMPORTE CARGOS`/`ABONOS` on debit). If both match to within one cent, the statement is marked
-`OK`; otherwise `MISMATCH`. The relationship shown on the Summary sheet is:
+## How the pipeline works
 
 ```
-spending_out  +  internal_excluded  ==  bbva_total_cargos
+PDF
+ -> PyMuPDF word extraction (text + x/y coordinates)          src/bank_parser/pdf/
+ -> header/column detection (semantic aliases, not literals)  src/bank_parser/detection/
+ -> row reconstruction (words -> visual rows -> columns)      src/bank_parser/detection/
+ -> row classification (transaction/continuation/header/...)  src/bank_parser/detection/
+ -> normalization (Decimal money, dates, signed amounts)      src/bank_parser/parsing/
+ -> financial validation (balance chain, printed totals)      src/bank_parser/validation/
+ -> confidence scoring                                        src/bank_parser/diagnostics/
+ -> CSV / XLSX export                                         src/bank_parser/export/
 ```
 
-So you can always see, per statement, how much real spending there was, how much was internal
-plumbing that got removed, and that the two add up to what the bank reported.
+**Header/column detection.** Each page is scanned for a horizontal band where several column
+labels are recognized at once (a `date` alias, a `description` alias, `debit`/`credit`/`amount`
+aliases, a `balance` alias) — this is strong, bank-agnostic evidence that a transaction table
+starts there. The x-position of each matched label becomes a column anchor; column boundaries are
+the midpoints between adjacent anchors.
 
-### 6. Categorization with a local LLM
+**Row reconstruction & classification.** Words are grouped into visual rows by y-position, then
+assigned to a column by x-position. Each row is classified — `TRANSACTION`, `CONTINUATION` (a
+multi-line description, e.g. an SPEI reference or RFC line), `REPEATED_HEADER` (the header
+reprinted on a later page), `FOOTER` (wide disclosure text), or `UNKNOWN` — using structural
+evidence (has a date? has an amount? how wide is the line?), with the reasons recorded for
+debugging.
 
-`bbva/categorize.py` assigns a `category` to each transaction:
+**Normalization.** Money is always parsed into `decimal.Decimal`, never `float`. Dates missing a
+year (common on debit/checking statements, e.g. `10/OCT`) are resolved against the statement's own
+printed period, including the December→January rollover.
 
-1. A list of **fast deterministic rules** catches the obvious, Mexico-specific cases first
-   (`OXXO → groceries`, `SPEI → transfer`, `CINEPOLIS → entertainment`, …).
-2. Anything not caught by a rule is sent to the local **Ollama** model (`qwen2.5:7b` by default),
-   one short prompt per *unique* merchant.
-3. Results are cached in `output/.categories_cache.json` keyed by merchant name, so re-runs are
-   instant and don't re-query the model.
-4. If Ollama isn't reachable, the tool prints a warning, labels the un-matched rows
-   `uncategorized`, and **still produces the workbook**. With `--no-llm` it skips step 2 entirely
-   and uses rules only.
-
-Categories are a *best-effort convenience*, not authoritative — they never affect amounts or
-reconciliation.
-
-### 7. Writing the Excel workbook
-
-`bbva/excel.py` writes a formatted `.xlsx` with `openpyxl`: numeric money cells, real date cells, a
-frozen/filterable header, sensible column widths, and color-coded reconciliation status.
-
----
-
-## The output file
-
-`output/transacciones.xlsx` has two sheets.
-
-**`Transactions`** — one row per real movement (installment purchases included, tagged so you can
-filter them):
-
-| column | meaning |
-|---|---|
-| `source_file` | which PDF the row came from |
-| `statement_type` | `debit`, `credit_regular`, or `credit_installment` |
-| `fecha_operacion` | date the operation happened |
-| `fecha_cargo` | date it posted (when the statement provides it) |
-| `description` | merchant / movement description |
-| `details` | extra lines: RFC, auth code, SPEI reference, counterparty, FX info |
-| `money_out` | amount charged / spent (positive, else blank) |
-| `money_in` | amount deposited / credited (positive, else blank) |
-| `balance` | running balance (debit statements) |
-| `category` | spending category |
-
-**`Summary`** — one row per statement plus a category-totals block:
-
-`source_file`, `type`, `period_start`, `period_end`, `txns`, `spending_out`, `spending_in`,
-`internal_excluded`, `installments`, `installment_total`, `bbva_total_cargos`, `bbva_total_abonos`,
-`reconciled` (color-coded **OK**/**MISMATCH**).
+**Financial validation.** Every extracted transaction's running balance is checked against the
+previous one plus its own signed amount. The statement's printed CARGOS/ABONOS (or DEBIT/CREDIT)
+totals and movement counts are discovered generically (a "TOTAL near a recognized column alias"
+scan) and cross-checked against the extracted sums. A bank profile's literal phrases are only a
+fallback if that generic scan finds nothing.
 
 ---
 
 ## Project layout
 
 ```
-bbva_to_excel.py        # CLI entry point — orchestrates everything
-bbva/
-  detect.py             # credit vs. debit format detection
-  layout.py             # word→row grouping, column bucketing, money parsing
-  dates.py              # Spanish months + year inference from the period
-  parse_credit.py       # credit-card statement parser
-  parse_debit.py        # debit / checking statement parser
-  models.py             # Transaction + StatementResult data classes, column order
-  categorize.py         # rules + local-LLM categorization, with on-disk cache
-  excel.py              # formatted workbook writer
-input/                  # put your PDFs here (git-ignored)
-output/                 # generated workbook + category cache (git-ignored)
+pyproject.toml
+src/bank_parser/
+  models/        DocumentWord, SpatialDocument, Transaction, BankStatement, StatementValidation
+  pdf/            PyMuPDF reading + best-effort Camelot assist
+  detection/      header/column detection, row reconstruction, row classification
+  parsing/        money/date parsing, column aliases, StatementParser (the public API)
+  profiles/       BankProfile hints (BBVA today; the seam for more banks later)
+  validation/     running-balance chain, printed-totals discovery, reconciliation
+  export/         DataFrame / CSV / XLSX writers
+  diagnostics/    confidence scoring, debug bundle dump
+  cli.py          the `bank-parser` command
+scripts/
+  research_harness.py   dumps PyMuPDF word geometry + Camelot output for a folder of PDFs
+tests/
+  unit/           synthetic, fast, no PDFs required
+  integration/    runs the real PDFs in input/, skipped automatically when it's empty
+input/            put your PDFs here (git-ignored)
+output/           generated workbook + CSV (git-ignored)
 ```
+
+`StatementParser` is deliberately the only thing the CLI touches beyond exporting — a future UI
+would call the exact same `parse()` method.
+
+---
+
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+Unit tests are synthetic and always run — money/date parsing, header/column detection against
+hand-built word layouts, row classification, balance-chain and totals reconciliation, export
+round-tripping. Integration tests parse every real PDF in `input/` and assert full reconciliation;
+they skip automatically when `input/` is empty, so the suite passes on a fresh clone with no bank
+data.
 
 ---
 
 ## Troubleshooting
 
-- **A statement shows `MISMATCH`.** Open the **Summary** sheet: compare `spending_out + internal_excluded`
-  against `bbva_total_cargos`. A mismatch usually means a transaction row wasn't parsed (e.g. an
-  unusual layout). The raw amounts are still in the PDF — re-run and check that statement's rows.
-- **All categories are `uncategorized`.** Ollama isn't running or the model isn't pulled. Run
-  `ollama pull qwen2.5:7b` and start Ollama, or use `--no-llm` to silence the warning.
+- **A statement shows `REVIEW`.** Check the **Summary** sheet's `warnings` column, or re-run with
+  `--debug` and inspect `output/debug/<file>.debug.json` — it records which header was found,
+  every row's classification and reasons, the printed totals that were discovered, and the
+  confidence breakdown.
 - **`No PDFs found in input/`.** Make sure your files end in `.pdf` and are in the folder passed to
   `--input` (default `input/`).
-- **Categories look stale after editing rules.** Delete `output/.categories_cache.json` to force a
-  fresh categorization pass.
+- **A layout isn't recognized at all.** Run `python scripts/research_harness.py` — it dumps every
+  word's coordinates and runs Camelot for comparison, which is the fastest way to see why the
+  generic header/column detection isn't finding the table.
 
 ---
 
 ## Privacy
 
-This repository is **public**. `input/`, `output/`, `pages/`, `private_data/`, `.venv/`, and
-`.DS_Store` are all git-ignored, so your real statements, the generated workbook, and the category
-cache stay on your machine and never get committed. Keep them in those folders and they're safe.
+This repository is **public**. `input/`, `output/`, `.venv/`, and `.DS_Store` are all git-ignored,
+so your real statements and the generated workbook stay on your machine and never get committed.
