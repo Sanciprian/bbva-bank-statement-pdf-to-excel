@@ -85,7 +85,7 @@ def _write_summary(ws, results: List[StatementResult]) -> None:
         "source_file", "type", "period_start", "period_end", "txns",
         "spending_out", "spending_in", "internal_excluded",
         "installments", "installment_total",
-        "bbva_total_cargos", "bbva_total_abonos", "reconciled",
+        "bbva_total_cargos", "bbva_total_abonos", "reconciled", "check_notes",
     ]
     ws.append(headers)
     for cell in ws[1]:
@@ -105,8 +105,9 @@ def _write_summary(ws, results: List[StatementResult]) -> None:
             round(out, 2), round(inc, 2), round(internal, 2),
             len(r.installments), round(inst_total, 2),
             r.printed_cargos, r.printed_abonos, "OK" if r.reconciled else "MISMATCH",
+            "; ".join(r.check_failures()),
         ])
-        cell = ws.cell(ws.max_row, len(headers))
+        cell = ws.cell(ws.max_row, len(headers) - 1)
         cell.fill = _OK_FILL if r.reconciled else _MISMATCH_FILL
 
     # Number/date formatting for the statement block.

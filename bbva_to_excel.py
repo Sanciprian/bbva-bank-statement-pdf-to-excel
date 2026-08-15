@@ -62,11 +62,8 @@ def main(argv: List[str] | None = None) -> int:
             f"  [{flag:8}] {pdf_path.name}  ({result.statement_type}) "
             f"{len(result.transactions)} txns{extra}"
         )
-        if not result.reconciled:
-            print(
-                f"             cargos {result.extracted_cargos} vs printed {result.printed_cargos}; "
-                f"abonos {result.extracted_abonos} vs printed {result.printed_abonos}"
-            )
+        for failure in result.check_failures():
+            print(f"             {failure}")
 
     if not results:
         print("Nothing extracted.", file=sys.stderr)

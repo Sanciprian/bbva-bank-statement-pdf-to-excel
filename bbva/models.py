@@ -77,6 +77,12 @@ class StatementResult:
     printed_abonos: Optional[float] = None
     extracted_cargos: Optional[float] = None
     extracted_abonos: Optional[float] = None
+    # Movement counts BBVA prints next to the totals (debit only; None = not printed).
+    printed_count_cargos: Optional[int] = None
+    printed_count_abonos: Optional[int] = None
+    # Row-level running-balance validation (debit only). Each entry describes one
+    # row whose SALDO does not equal previous SALDO +/- the row amounts.
+    balance_chain_errors: List[str] = field(default_factory=list)
 
     @staticmethod
     def _close(a: Optional[float], b: Optional[float], tol: float = 0.05) -> bool:
@@ -93,5 +99,40 @@ class StatementResult:
         return self._close(self.printed_abonos, self.extracted_abonos)
 
     @property
+    def counts_ok(self) -> bool:
+        """Extracted row counts vs the counts BBVA prints (vacuously true when
+        the statement doesn't print counts, e.g. credit cards)."""
+        if self.printed_count_cargos is not None:
+            n = sum(1 for t in self.transactions if t.money_out)
+            if n != self.printed_count_cargos:
+                return False
+        if self.printed_count_abonos is not None:
+            n = sum(1 for t in self.transactions if t.money_in)
+            if n != self.printed_count_abonos:
+                return False
+        return True
+
+    @property
+    def chain_ok(self) -> bool:
+        return not self.balance_chain_errors
+
+    @property
     def reconciled(self) -> bool:
-        return self.cargos_ok and self.abonos_ok
+        return self.cargos_ok and self.abonos_ok and self.counts_ok and self.chain_ok
+
+    def check_failures(self) -> List[str]:
+        """Human-readable list of every failed check (empty when reconciled)."""
+        fails: List[str] = []
+        if not self.cargos_ok:
+            fails.append(f"cargos {self.extracted_cargos} != printed {self.printed_cargos}")
+        if not self.abonos_ok:
+            fails.append(f"abonos {self.extracted_abonos} != printed {self.printed_abonos}")
+        if not self.counts_ok:
+            n_out = sum(1 for t in self.transactions if t.money_out)
+            n_in = sum(1 for t in self.transactions if t.money_in)
+            fails.append(
+                f"row counts {n_out} cargos/{n_in} abonos != printed "
+                f"{self.printed_count_cargos}/{self.printed_count_abonos}"
+            )
+        fails.extend(self.balance_chain_errors)
+        return fails

@@ -23,4 +23,9 @@ def detect_format(pdf: "pdfplumber.PDF") -> str:
     # Fall back to credit if the card-only "PAGO PARA NO GENERAR INTERESES" marker shows.
     if "PAGO PARA NO GENERAR INTERESES" in upper:
         return models.CREDIT_REGULAR
-    return models.DEBIT
+    # Fail closed: an unknown layout must stop loudly, never be parsed by guesswork.
+    raise ValueError(
+        "unrecognized BBVA statement format (no known section marker found) - "
+        "the layout may have changed; parsing it with the wrong parser would "
+        "produce unreliable numbers"
+    )

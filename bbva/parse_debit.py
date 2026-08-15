@@ -73,6 +73,8 @@ def parse(pdf: "pdfplumber.PDF", source_file: str) -> models.StatementResult:
     result.extracted_cargos = round(sum(t.money_out for t in txns if t.money_out), 2)
     result.extracted_abonos = round(sum(t.money_in for t in txns if t.money_in), 2)
     result.printed_cargos, result.printed_abonos = _parse_debit_totals(full_text)
+    result.printed_count_cargos, result.printed_count_abonos = _parse_debit_counts(full_text)
+    result.balance_chain_errors = _validate_balance_chain(txns)
     return result
 
 
@@ -132,12 +134,53 @@ def _parse_transaction_row(
         description=" ".join(desc_words).strip(),
         money_out=amounts.get("cargos"),
         money_in=amounts.get("abonos"),
-        balance=amounts.get("liquidacion") or amounts.get("operacion"),
+        # SALDO OPERACION is the true running balance in operation-date order
+        # (LIQUIDACION reflects settlement order and appears stale on rows that
+        # liquidate later), so prefer it.
+        balance=amounts.get("operacion") or amounts.get("liquidacion"),
     )
 
 
 def _nearest_column(center: float, centers: Dict[str, float]) -> str:
     return min(centers, key=lambda c: abs(centers[c] - center))
+
+
+def _parse_debit_counts(text: str):
+    """Movement counts printed next to the totals, e.g.
+    ``TOTAL MOVIMIENTOS CARGOS 8`` / ``TOTAL MOVIMIENTOS ABONOS 3``."""
+    cargos = abonos = None
+    m = re.search(r"TOTAL MOVIMIENTOS CARGOS\s+(\d+)", text, re.IGNORECASE)
+    if m:
+        cargos = int(m.group(1))
+    m = re.search(r"TOTAL MOVIMIENTOS ABONOS\s+(\d+)", text, re.IGNORECASE)
+    if m:
+        abonos = int(m.group(1))
+    return cargos, abonos
+
+
+def _validate_balance_chain(txns: List[models.Transaction]) -> List[str]:
+    """Check that each printed SALDO OPERACION equals the previous saldo plus the
+    signed amounts of the rows in between. Pinpoints the exact row a misparse hits,
+    which the whole-statement totals check cannot do.
+
+    BBVA only prints a saldo on the last row of a same-moment group, so rows with
+    ``balance is None`` just accumulate into the expectation for the next checkpoint.
+    """
+    errors: List[str] = []
+    expected = None
+    for t in txns:
+        delta = (t.money_in or 0.0) - (t.money_out or 0.0)
+        if expected is not None:
+            expected += delta
+        if t.balance is None:
+            continue
+        if expected is not None and abs(expected - t.balance) > 0.01:
+            errors.append(
+                f"balance chain broken at {t.fecha_operacion} '{t.description[:40]}': "
+                f"expected {expected:.2f}, statement says {t.balance:.2f}"
+            )
+        expected = t.balance  # re-anchor on the printed value either way
+    return errors
 
 
 def _parse_debit_totals(text: str):

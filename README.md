@@ -178,12 +178,27 @@ regular table — `PROMOCION MESES S/INT` (a `+`) and `TRASPASO A MESES SIN INTE
 They cancel to zero and are **not real spending**, so they're excluded from the output. They are,
 however, still counted during reconciliation, because BBVA's printed totals include them (see next).
 
-### 5. Reconciliation (the correctness check)
+### 5. Reconciliation (the correctness checks)
 
-For every statement the tool sums the charges and the credits **including** the internal pairs and
-compares them to the totals BBVA prints (`TOTAL CARGOS`/`TOTAL ABONOS` on credit,
-`TOTAL IMPORTE CARGOS`/`ABONOS` on debit). If both match to within one cent, the statement is marked
-`OK`; otherwise `MISMATCH`. The relationship shown on the Summary sheet is:
+Every statement must pass **three independent checks**, each derived from numbers BBVA itself
+prints, before it is marked `OK`:
+
+1. **Totals.** The tool sums the charges and the credits **including** the internal pairs and
+   compares them to the printed totals (`TOTAL CARGOS`/`TOTAL ABONOS` on credit,
+   `TOTAL IMPORTE CARGOS`/`ABONOS` on debit), to within 5 cents. If the printed totals can't be
+   found at all (e.g. BBVA reworded the line), the check **fails closed** — it never passes by
+   default.
+2. **Movement counts** (debit). BBVA prints `TOTAL MOVIMIENTOS CARGOS n` / `ABONOS n`; the number
+   of extracted charge/deposit rows must match exactly. This catches a dropped or duplicated row
+   even when the amounts still happen to sum correctly.
+3. **Balance chain** (debit). Each printed `SALDO OPERACIÓN` must equal the previous saldo plus
+   the signed amounts of the rows in between. This is a *row-level* check: when it fails, it names
+   the exact date and description where the chain broke, instead of just flagging the whole
+   statement.
+
+Any failure marks the statement `MISMATCH`, itemizes the reasons in the console and in the
+Summary sheet's `check_notes` column, and exits non-zero. The totals relationship shown on the
+Summary sheet is:
 
 ```
 spending_out  +  internal_excluded  ==  bbva_total_cargos
@@ -240,7 +255,7 @@ filter them):
 
 `source_file`, `type`, `period_start`, `period_end`, `txns`, `spending_out`, `spending_in`,
 `internal_excluded`, `installments`, `installment_total`, `bbva_total_cargos`, `bbva_total_abonos`,
-`reconciled` (color-coded **OK**/**MISMATCH**).
+`reconciled` (color-coded **OK**/**MISMATCH**), `check_notes` (which check failed and where).
 
 ---
 
@@ -257,9 +272,25 @@ bbva/
   models.py             # Transaction + StatementResult data classes, column order
   categorize.py         # rules + local-LLM categorization, with on-disk cache
   excel.py              # formatted workbook writer
+tests/
+  test_bbva.py          # unit tests (synthetic) + integration tests over input/
 input/                  # put your PDFs here (git-ignored)
 output/                 # generated workbook + category cache (git-ignored)
 ```
+
+---
+
+## Tests
+
+```bash
+python -m pytest tests/ -v
+```
+
+The unit tests use only synthetic data and always run. The integration tests parse every PDF in
+`input/` and assert that all three reconciliation checks pass, that every row has a date, a
+description, and exactly one of `money_out`/`money_in`, and that every date falls inside the
+statement's printed period — they skip automatically when `input/` is empty, so the suite works on
+a fresh clone without any bank data.
 
 ---
 
